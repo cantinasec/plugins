@@ -5,5 +5,5 @@
   "author": {
     "name": "cantina.security"
   },
-  "keywords": ["security", "supply-chain", "incident-response", "npm", "pypi"]
+  "keywords": ["security", "security-tooling", "appsec", "supply-chain", "incident-response"]
 }
