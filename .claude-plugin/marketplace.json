@@ -1,0 +1,21 @@
+{
+  "name": "cantinasec-plugins",
+  "owner": {
+    "name": "cantina.security"
+  },
+  "metadata": {
+    "description": "Security tools from cantina.security",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "cantinasec",
+      "description": "Detect and respond to known supply-chain compromises (litellm, axios). Checks installed versions, lockfiles, IOC artifacts, C2 domains, and shell history, then produces a structured exposure report.",
+      "version": "1.0.0",
+      "author": {
+        "name": "cantina.security"
+      },
+      "source": "./plugins/cantinasec"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "cantinasec",
+  "version": "1.0.0",
+  "description": "Detect and respond to known supply-chain compromises (litellm, axios). Each skill checks installed versions, lockfiles, IOC artifacts, C2 domains, and shell history, then produces a structured exposure report.",
+  "author": {
+    "name": "cantina.security"
+  },
+  "keywords": ["security", "supply-chain", "incident-response", "npm", "pypi"]
+}
