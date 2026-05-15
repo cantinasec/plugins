@@ -56,16 +56,19 @@ cd klaxon
 ### 2. Verify Python 3.11+
 
 ```bash
-python3.11 --version || brew install python@3.11   # macOS
-# Linux: use the system package manager
+python3 --version   # must be >= 3.11; if older or missing, install:
+#   macOS:   brew install python@3.11
+#   Linux:   use the system package manager (apt/dnf/yum install python3.11)
+# If your default `python3` is still < 3.11 after install, use `python3.11`
+# explicitly in step 3 instead.
 ```
 
 ### 3. Create venv and install
 
 ```bash
-python3.11 -m venv .venv
+python3 -m venv .venv          # or python3.11 if your default is < 3.11
 .venv/bin/pip install -e ".[dev,slack]"
-.venv/bin/pytest -q   # confirm 139+ tests pass before continuing
+.venv/bin/pytest -q             # confirm the test suite passes before continuing
 ```
 
 ### 4. Generate the starter config
