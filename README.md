@@ -14,3 +14,4 @@ Cantina Claude Marketplace Plugins
 
 - `/cantinasec:axios` — Check for the axios npm supply-chain compromise (versions 1.14.1, 0.30.4)
 - `/cantinasec:litellm` — Check for the litellm PyPI supply-chain compromise (versions 1.82.7, 1.82.8)
+- `/cantinasec:klaxon` — Set up and demo klaxon, Cantina's self-hosted social monitoring and brand-protection tool (impersonation, mention spikes, keyword spikes)
