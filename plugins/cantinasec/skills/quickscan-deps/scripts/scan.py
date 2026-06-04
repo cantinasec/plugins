@@ -210,16 +210,25 @@ def scan_pip(project_root: pathlib.Path, *, use_osv: bool, quiet: bool) -> tuple
             content = path.read_text(encoding="utf-8", errors="replace")
             saw_anything_in_file = False
             for lineno, raw in enumerate(content.splitlines(), start=1):
-                # strip comments and continuations
+                # strip inline comments
                 line = raw.split("#", 1)[0].rstrip()
-                if not line.strip() or line.lstrip().startswith("-"):
-                    # check git+
-                    if line.lstrip().startswith(("-e git+", "git+")):
-                        _warn(items, "high", "pip",
-                              line.strip()[:120],
-                              f"{rel}:{lineno}",
-                              "Direct-from-git install bypasses PyPI's tamper-detection — the install pulls whatever's at HEAD of the named ref.",
-                              "Replace with a tagged PyPI release (`pkg==1.2.3`) or pin the URL to a specific commit SHA.")
+                stripped = line.lstrip()
+                # Direct-from-git references take three shapes in requirements.txt:
+                #   1) "-e git+https://…"      (editable git install)
+                #   2) "git+https://…"         (bare git URL)
+                #   3) "pkg @ git+https://…"   (PEP 508 direct reference)
+                # All of them bypass PyPI's tamper-detection; flag them before any
+                # comment/continuation guard or PEP 508 normalization runs.
+                if (stripped.startswith(("-e git+", "git+"))
+                        or re.match(r"^[A-Za-z][A-Za-z0-9._-]*(?:\s*\[[^\]]+\])?\s*@\s*git\+", stripped)):
+                    _warn(items, "high", "pip",
+                          stripped[:120],
+                          f"{rel}:{lineno}",
+                          "Direct-from-git install bypasses PyPI's tamper-detection — the install pulls whatever's at HEAD of the named ref.",
+                          "Replace with a tagged PyPI release (`pkg==1.2.3`) or pin the URL to a specific commit SHA.")
+                    continue
+                # Skip blank lines and pip CLI flags (-r, -c, --hash=…, etc.)
+                if not stripped or stripped.startswith("-"):
                     continue
                 name, pinned = _parse_pep508(line)
                 if not name or name.startswith("-"):
@@ -473,13 +482,15 @@ def scan_mcp(project_root: pathlib.Path, *, scan_env: bool, quiet: bool) -> tupl
                 continue
             scanned += 1
             command = cfg.get("command") or ""
-            args = cfg.get("args") or []
-            env_dict = cfg.get("env") or {}
+            raw_args = cfg.get("args")
+            args = raw_args if isinstance(raw_args, list) else []
+            raw_env = cfg.get("env")
+            env_dict = raw_env if isinstance(raw_env, dict) else {}
             url = cfg.get("url") or ""
             evidence_base = f"{rel_or_home} :: mcpServers.{srv_name}"
 
             # Unpinned npx / uvx
-            if command in ("npx", "uvx") and isinstance(args, list):
+            if command in ("npx", "uvx") and args:
                 for arg in args:
                     if not isinstance(arg, str) or arg.startswith("-"):
                         continue
@@ -492,7 +503,8 @@ def scan_mcp(project_root: pathlib.Path, *, scan_env: bool, quiet: bool) -> tupl
                               f"Pin the version, e.g. `{command} {pkg}@<x.y.z>`. For maximum stability, install locally and reference the binary path.")
                         break  # one warning per server is enough
 
-            # curl-pipe-shell installer (in command, args, or anywhere stringy)
+            # curl-pipe-shell installer (in command, args, or anywhere stringy).
+            # env_dict and args are already type-guarded above, so this is safe.
             stringy = [command] + [str(a) for a in args if isinstance(a, (str, int))] + [str(v) for v in env_dict.values() if isinstance(v, str)]
             for s in stringy:
                 if CURL_PIPE_SHELL_RE.search(s):
@@ -597,13 +609,50 @@ def run(project_root: pathlib.Path, *, use_osv: bool, scan_env: bool, quiet: boo
     }
 
 
+# Order warnings high → medium → low when printing the summary
+_CONCERN_ORDER = {"high": 0, "medium": 1, "low": 2}
+
+
+def print_summary(payload: dict) -> None:
+    """Print the human-readable terminal summary documented in SKILL.md."""
+    print("QUICKSCAN DEPENDENCY WARNINGS")
+    print("=" * 29)
+    print(f"Project: {payload.get('project_path', '?')}")
+    vectors = payload.get("vectors") or {}
+    for key, label in (("pip", "Pip manifests"), ("vscode", "VS Code extensions"), ("mcp", "MCP servers")):
+        v = vectors.get(key) or {}
+        print(f"{label:>20} scanned: {v.get('scanned', 0):<4} | warnings: {v.get('warnings', 0)}")
+    counts = payload.get("concern_counts") or {}
+    print()
+    print(f"High: {counts.get('high', 0)} | Medium: {counts.get('medium', 0)} | Low: {counts.get('low', 0)}")
+    warnings = payload.get("warnings") or []
+    if warnings:
+        print()
+        ordered = sorted(warnings, key=lambda w: _CONCERN_ORDER.get((w.get("concern") or "low").lower(), 3))
+        for w in ordered:
+            concern = (w.get("concern") or "low").upper()
+            vector = w.get("vector", "?")
+            target = w.get("target", "?")
+            print(f"[{concern}] {vector} — {target}")
+            print(f"  What we saw: {w.get('evidence', '?')}")
+            print(f"  Why it caught our eye: {w.get('why', '?')}")
+            print(f"  One thing you could do: {w.get('suggested_fix') or w.get('fix', '?')}")
+            print()
+    print(
+        "Quickscan is a heads-up tool, not a security audit. These are patterns\n"
+        "worth a closer look — the judgment about whether each one is a real\n"
+        "problem is yours."
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("path", nargs="?", default=".", help="Project path to scan (default: cwd)")
     parser.add_argument("--out", default="/tmp/quickscan-findings.json", help="Output JSON path")
     parser.add_argument("--no-osv", action="store_true", help="Skip OSV vuln-database queries (offline / fast mode)")
     parser.add_argument("--no-env", action="store_true", help="Skip global VS Code + MCP scans (project-only)")
-    parser.add_argument("--quiet", action="store_true", help="Suppress progress to stderr")
+    parser.add_argument("--no-summary", action="store_true", help="Suppress the human-readable terminal summary (print only the output path)")
+    parser.add_argument("--quiet", action="store_true", help="Suppress per-vector progress to stderr")
     args = parser.parse_args()
 
     project_root = pathlib.Path(args.path).expanduser().resolve()
@@ -619,7 +668,15 @@ def main() -> int:
     )
     pathlib.Path(args.out).write_text(json.dumps(payload, indent=2))
     _log(args.quiet, f"scan: wrote {args.out}")
-    print(args.out)
+
+    if args.no_summary:
+        # Legacy mode: just print the output path on stdout so callers can pipe it.
+        print(args.out)
+    else:
+        # Default: print the documented human-readable summary on stdout,
+        # and the output path on stderr (still accessible, doesn't pollute pipes).
+        print_summary(payload)
+        print(f"\n→ JSON written to {args.out}", file=sys.stderr)
     return 0
 
 

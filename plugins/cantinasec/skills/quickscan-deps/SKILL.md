@@ -88,35 +88,22 @@ The sub-sections below describe what scan.py looks for. They're for human review
 
 ### Vector 1 — Pip Packages
 
-Manifests to inspect:
-- `requirements*.txt`, `requirements/*.txt`
-- `Pipfile`, `Pipfile.lock`
-- `pyproject.toml` (poetry / pdm / hatch)
-- `setup.py`, `setup.cfg`
-- `environment.yml` (conda)
+Manifests currently parsed:
+- `requirements*.txt` (top-level and one subdir deep, e.g. `requirements/prod.txt`)
+- `Pipfile` (`[packages]` and `[dev-packages]`)
+- `pyproject.toml` — PEP 621 (`[project] dependencies`, `optional-dependencies`) and Poetry (`[tool.poetry.dependencies]`)
 
-Live install state:
-```bash
-pip list --format=json 2>/dev/null
-pip --version
-```
+Other Python manifest shapes (`Pipfile.lock`, `setup.py`, `setup.cfg`, `environment.yml`) and live `pip list` state are not currently parsed. If a project relies on those shapes, scan.py will just report 0 packages from that file — it's a known gap, not a silent miss.
 
-**Checks:**
+**Checks (5 total):**
 
 1. **Unpinned versions** — dependency without `==` or hash pin → **medium**. Floating versions (`>=`, `~=`, no operator) let the next install land a different release.
-2. **Known typosquats** — compare against this short list of common targets and flag near-matches (Levenshtein ≤ 2) → **high**:
+2. **Known typosquats** — compare each declared dependency against this short list of common targets and flag near-matches (Levenshtein ≤ 2) → **high**:
    `requests`, `urllib3`, `numpy`, `pandas`, `pillow`, `cryptography`, `pyyaml`, `boto3`, `flask`, `django`, `fastapi`, `pytest`, `setuptools`, `tensorflow`, `torch`, `transformers`, `openai`, `anthropic`, `langchain`.
    Examples to flag: `requessts`, `python-requests`, `numpyy`, `crypt0graphy`.
-3. **OSV advisories** — for each installed package, query the OSV API:
-   ```bash
-   curl -sS -X POST -H "Content-Type: application/json" \
-     -d '{"package":{"name":"<pkg>","ecosystem":"PyPI"},"version":"<ver>"}' \
-     https://api.osv.dev/v1/query
-   ```
-   Any returned advisory → **high** (RCE-class included).
-4. **Post-install scripts** — grep `setup.py` files in `site-packages/` for `subprocess`, `urllib.request`, `requests.get`, or `os.system` calls executed at install time → **medium**; **high** if the call hits a non-PyPI domain.
-5. **No hash pinning** — `requirements.txt` without `--hash=sha256:...` entries → **low**.
-6. **Direct-from-git installs** — `pip install git+https://...` lines in any manifest → **high** if the URL is not a well-known org (pypa, psf, etc.).
+3. **OSV advisories** — for each `==`-pinned dependency declared in a manifest, query OSV.dev's `/v1/querybatch` endpoint and flag any returned advisory → **high**. Unpinned deps are not queried (no concrete version to ask about). The scanner does not inspect `site-packages/` directly.
+4. **No hash pinning** — `requirements.txt` without `--hash=sha256:...` entries → **low**.
+5. **Direct-from-git installs** — `git+https://...` references in `requirements.txt` (including the `-e git+`, bare `git+`, and PEP 508 `pkg @ git+` shapes) → **high**.
 
 ### Vector 2 — VS Code Extensions
 
@@ -129,17 +116,14 @@ code --list-extensions --show-versions 2>/dev/null
 
 For each extension directory, read `package.json`.
 
-**Checks:**
+**Checks (4 total):**
 
-1. **Publisher trust** — `publisher` not on the trusted-publishers list (`ms-*`, `github`, `redhat`, `dbaeumer`, `esbenp`, `bradlc`, `eamodio`, `streetsidesoftware`, `vscodevim`, `anthropic`, `continue`) → **medium**. Single-author publishers with < 50k installs → **high**.
-2. **Broad capability declarations** — search `package.json` for these capabilities → **high**:
-   - `"untrustedWorkspaces": { "supported": true }` with no restrictions
-   - `"virtualWorkspaces": true` on extensions that also declare network access
-   - Extensions declaring `terminal` activation that also bundle network code
-3. **Bundled `node_modules` with known-bad packages** — recurse into `<ext>/node_modules` and OSV-query any package version → **high** per advisory hit.
-4. **Telemetry / outbound endpoints** — grep extension source for hardcoded HTTP(S) URLs → **medium** (list the domains so the reader can decide).
-5. **Display-name impersonation** — extension where the display name closely matches a well-known extension but the publisher differs → **high** (e.g. an "ESLint" extension not from `dbaeumer`).
-6. **Auto-update from untrusted sources** — extension with a custom `updateUrl` outside the official Marketplace → **high**.
+1. **Publisher trust** — `publisher` not on the trusted-publishers list (`ms-*`, `github`, `redhat`, `dbaeumer`, `esbenp`, `bradlc`, `eamodio`, `streetsidesoftware`, `vscodevim`, `anthropic`, `continue`) → **medium**. (The "single-author with < 50k installs" tier in earlier drafts is not currently implemented — the scanner has no install-count signal.)
+2. **Broad `untrustedWorkspaces` capability** — extension declares `"capabilities": { "untrustedWorkspaces": { "supported": true } }` with no `restrictedConfigurations` → **high**. (The `virtualWorkspaces`/`terminal` sub-checks listed in earlier drafts are not yet implemented.)
+3. **Display-name impersonation** — extension's `displayName` matches a well-known extension (e.g. `eslint` → `dbaeumer`, `prettier - code formatter` → `esbenp`) but the publisher differs → **high**.
+4. **Auto-update from untrusted sources** — extension with a custom `updateUrl` outside the official Marketplace → **high**.
+
+Bundled-`node_modules` OSV-querying and outbound-endpoint grepping were earlier ideas and are not yet implemented.
 
 ### Vector 3 — MCP Servers
 
